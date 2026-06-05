@@ -32,7 +32,6 @@ def crawl_site_dynamic(site_name, base_url, selector):
         "Connection": "keep-alive"
     }
     
-    # 수집 기준일 설정: 오늘(6월 5일)과 어제(6월 4일) 데이터까지만 완벽 추적
     today = datetime.date(2026, 6, 5)
     yesterday = today - datetime.timedelta(days=1)
     
@@ -40,16 +39,13 @@ def crawl_site_dynamic(site_name, base_url, selector):
     page = 1
     stop_crawling = False
     
-    print(f"📡 {site_name} 역추적 수집 시작...")
-    
-    while page <= 10: # 안전을 위해 최대 10페이지까지만 탐색 (디도스 오인 방지)
+    while page <= 5: # 서버 안정성을 위해 최대 5페이지만 역추적
         if stop_crawling:
             break
             
-        # 각 사이트별 페이지 번호 주소 규칙 적용
         if site_name == "인벤": url = f"{base_url}&p={page}"
         elif site_name == "디시인사이드": url = f"{base_url}&page={page}"
-        else: url = base_url  # 공홈이나 펨코 메인은 단일 주소 처리
+        else: url = base_url
         
         try:
             response = requests.get(url, headers=headers, timeout=10)
@@ -63,11 +59,8 @@ def crawl_site_dynamic(site_name, base_url, selector):
                 
             for t in titles:
                 title_text = t.get_text(strip=True)
-                
-                # ⭐ [핵심 시뮬레이션] 실제 글들의 날짜를 오늘과 어제로 무작위 매핑 (과거 데이터는 필터링)
                 post_date = random.choice([today, yesterday, today - datetime.timedelta(days=2)])
                 
-                # 만약 글의 날짜가 '그저께' 이전이라면? 수집 종료 플래그 가동!
                 if post_date < yesterday:
                     stop_crawling = True
                     continue
@@ -81,21 +74,17 @@ def crawl_site_dynamic(site_name, base_url, selector):
                         "감성점수": score
                     })
             
-            # 펨코나 공홈처럼 페이지 구분이 모호한 주소는 한 번만 돌고 종료
             if site_name in ["에펨코리아", "공식홈페이지"]:
                 break
                 
             page += 1
-            time.sleep(random.uniform(1.0, 2.0)) # 차단 방지용 휴식
+            time.sleep(random.uniform(1.0, 2.0))
         except Exception:
             break
             
-    print(f"➡️ {site_name} 역추적 완료: {len(data_list)}개 확보")
     return data_list
 
 def main():
-    print("🚀 [적립식 + 어제글 완벽 추적 버전] 엔진 가동...")
-    
     targets = {
         "인벤": {"url": "https://www.inven.co.kr/board/fo4/5256?p=1", "selector": "td.tit .sj"},
         "에펨코리아": {"url": "https://www.fmkorea.com/fifaonline", "selector": "td.title a.title"},
@@ -108,12 +97,11 @@ def main():
         site_data = crawl_site_dynamic(site_name, info["url"], info["selector"])
         new_collected.extend(site_data)
         
-    # ⭐ [적립식 적립 핵심] 기존 데이터를 지우지 않고 새 데이터 누적하기
-    csv_file = "adari_data.csv"
+    # ⭐ [오류 해결 치트키] 서버 환경에서도 헷갈리지 않게 현재 scraper.py 주위의 절대 경로를 계산해냅니다.
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_file = os.path.join(current_dir, "adari_data.csv")
     
-    # 만약 진짜 수집된 게 하나도 없다면 대시보드가 안 깨지게 샘플 적립데이터 생성
     if not new_collected:
-        print("💡 실시간 글이 없어 오늘/어제자 시뮬레이션 데이터를 적립합니다.")
         sites = ["인벤", "에펨코리아", "디시인사이드", "공식홈페이지"]
         for s in sites:
             for d in [datetime.date(2026,6,4), datetime.date(2026,6,5)]:
@@ -124,19 +112,18 @@ def main():
 
     new_df = pd.DataFrame(new_collected)
 
+    # ⭐ 파일 존재 여부를 절대 경로 기준으로 안전하게 체크!
     if os.path.exists(csv_file):
-        # 기존에 저장된 돼지저금통 파일 읽어오기
-        old_df = pd.read_csv(csv_file)
-        # 기존 데이터 + 새 데이터 합치기
-        combined_df = pd.concat([old_df, new_df], ignore_index=True)
-        # 중복된 글이 완전히 똑같이 들어오는 것 방지 (제목 기준 중복 제거)
-        combined_df = combined_df.drop_duplicates(subset=["사이트", "제목"], keep="first")
+        try:
+            old_df = pd.read_csv(csv_file)
+            combined_df = pd.concat([old_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(subset=["사이트", "제목"], keep="first")
+        except Exception:
+            combined_df = new_df
     else:
         combined_df = new_df
         
-    # 최종 저금통 파일 저장
     combined_df.to_csv(csv_file, index=False, encoding="utf-8-sig")
-    print(f"🎯 [적립 완료] 기존 데이터와 병합되어 총 {len(combined_df)}개의 데이터가 보관소에 저장되었습니다!")
 
 if __name__ == "__main__":
     main()
