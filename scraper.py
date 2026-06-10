@@ -5,125 +5,185 @@ import datetime
 import time
 import random
 import os
+import sys
+import re
 
 def analyze_adari_sentiment(text):
-    extreme_negative = ['삭제', '접는다', '지운다', '정무', '사퇴', '주작', '부셨다', '혈압', '섭종', '망겜', '좆', '개씨발']
-    negative = ['킹받네', '짜증', '억까', '팅김', '보정', '얼탱', '빡치', '개같', '노답', '시발', '우웩']
-    positive = ['갓겜', '개꿀', '고쳐', '줄었', '적어졌', '찬양', '리얼', '만족', '좋아']
-
+    # 🤬 1점: 극단적 부정 (보정/주작 확신 및 게임 삭제 수준)
+    extreme_negative = [
+        '주작', '조작', '보정', '서버조작', '엔진', '망겜', '좆', '개씨발', '개좆', '씹창', 
+        '삭제', '접는다', '지운다', '빡종', '정무사퇴', '주작겜', '현질안함', '씨발', '병신', '쓰레기'
+    ]
+    
+    # 😠 2점: 일반적 부정 (인게임 현상 불만: 세컨볼, 루즈볼, 골대 등 짜증)
+    negative = [
+        '억까', '얼탱', '빡치', '개같', '노답', '시발', '키씹', '골대', '튕겨', '세컨볼', 
+        '루즈볼', '팅겨', '팅김', '패스미스', '어이', '지랄', '우웩', '킹받', '짜증', '밀린다'
+    ]
+    
+    # 😇 4~5점: 긍정 (아다리 완화 인정, 굴절 패치 찬양 및 만족)
+    positive = [
+        '고쳐', '줄었', '적어졌', '갓패치', '정상화', '수정', '개선', '피드백', '부드럽', 
+        '갓정무', '빛정무', '만족', '좋아', '할만', '킹정', '깔끔', '개꿀', '찬양'
+    ]
+    
     has_ext_neg = any(kw in text for kw in extreme_negative)
     has_neg = any(kw in text for kw in negative)
     has_pos = any(kw in text for kw in positive)
     
-    if has_ext_neg: return 1
-    elif has_neg and not has_pos: return 2
+    # 🎯 감성 점수 판독 레이어
+    if has_ext_neg: 
+        return 1
+    elif has_neg and not has_pos: 
+        return 2
     elif has_pos and not (has_ext_neg or has_neg):
-        if '갓겜' in text or '고쳐졌' in text: return 5
-        else: return 4
-    elif has_pos and has_neg: return 4
-    return 3
+        if any(kw in text for kw in ['고쳐졌', '갓패치', '정상화', '갓정무']): 
+            return 5
+        return 4
+    elif has_pos and has_neg: 
+        return 4  # 완화 의견이 포함된 복합 감정
+        
+    return 3  # 😐 3점: 중립 (비난도 찬양도 없는 단순 질문이나 정보 공유 글)
 
-def crawl_site_dynamic(site_name, base_url, selector):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://search.naver.com/search.naver?query=%EB%A9%94%EC%9D%B4%ED%94%8C%EC%8A%A4%ED%86%A0%EB%A6%AC",
-        "Connection": "keep-alive"
-    }
-    
-    today = datetime.date(2026, 6, 5)
-    yesterday = today - datetime.timedelta(days=1)
-    
+def parse_board_date(date_text):
+    now = datetime.datetime.now()
+    today_date = now.date()
+    date_text = date_text.strip()
+    try:
+        if ":" in date_text and len(date_text) <= 5: 
+            return today_date
+        standard_match = re.search(r'(20\d{2})[-.](\d{1,2})[-.](\d{1,2})', date_text)
+        if standard_match: 
+            return datetime.date(int(standard_match.group(1)), int(standard_match.group(2)), int(standard_match.group(3)))
+        short_match = re.search(r'(\d{1,2})[-./](\d{1,2})', date_text)
+        if short_match: 
+            return datetime.date(2026, int(short_match.group(1)), int(short_match.group(2)))
+        if "분 전" in date_text or "시간 전" in date_text: 
+            return today_date
+    except Exception: 
+        pass
+    return today_date
+
+def crawl_search_engine(site_name, keyword, info, target_start_date, target_end_date):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
     data_list = []
     page = 1
     stop_crawling = False
     
-    while page <= 5: # 서버 안정성을 위해 최대 5페이지만 역추적
-        if stop_crawling:
-            break
+    print(f"   -> [{site_name}] '{keyword}' 검색 (범위: {target_start_date} ~ {target_end_date})")
+    
+    while not stop_crawling:
+        if site_name == "에펨코리아":
+            url = f"{info['base_url']}&search_keyword={keyword}&page={page}"
+        elif site_name == "인벤":
+            url = f"{info['base_url']}&query={keyword}&p={page}"
+        elif site_name == "디시인사이드":
+            url = f"{info['base_url']}&s_keyword={keyword}&page={page}"
+        elif site_name == "공식홈페이지":
+            url = f"{info['base_url']}&search_keyword={keyword}&page={page}"
             
-        if site_name == "인벤": url = f"{base_url}&p={page}"
-        elif site_name == "디시인사이드": url = f"{base_url}&page={page}"
-        else: url = base_url
-        
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code != 200:
-                break
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code != 200: break
             soup = BeautifulSoup(response.text, 'html.parser')
-            titles = soup.select(selector)
+            rows = soup.select(info["selectors"]["container"])
+            if not rows: break
             
-            if not titles:
-                break
-                
-            for t in titles:
-                title_text = t.get_text(strip=True)
-                post_date = random.choice([today, yesterday, today - datetime.timedelta(days=2)])
-                
-                if post_date < yesterday:
-                    stop_crawling = True
+            for row in rows:
+                try:
+                    title_el = row.select_one(info["selectors"]["title"])
+                    date_el = None
+                    for selector in info["selectors"]["date_selectors"]:
+                        date_el = row.select_one(selector)
+                        if date_el: break
+                        
+                    if not title_el or not date_el: continue
+                    
+                    title_text = title_el.get_text(strip=True)
+                    post_date = parse_board_date(date_el.get_text(strip=True))
+                    
+                    # 🛑 [종료] 대시보드 설정 시작일보다 더 과거 글로 넘어가면 서치 즉시 중단
+                    if post_date < target_start_date:
+                        stop_crawling = True
+                        break
+                        
+                    # 🎯 [검증] 대시보드 필터 날짜 도장이 정확히 찍혀 있는 글만 수집
+                    if target_start_date <= post_date <= target_end_date:
+                        score = analyze_adari_sentiment(title_text)
+                        data_list.append({
+                            "날짜": post_date.strftime("%Y-%m-%d"),
+                            "사이트": site_name,
+                            "제목": title_text,
+                            "감성점수": score,
+                            "수집시간": datetime.datetime.now().strftime("%H:%M:%S")
+                        })
+                except Exception:
                     continue
-                
-                if '아다리' in title_text or '굴절' in title_text:
-                    score = analyze_adari_sentiment(title_text)
-                    data_list.append({
-                        "날짜": post_date.strftime("%Y-%m-%d"),
-                        "사이트": site_name,
-                        "제목": title_text,
-                        "감성점수": score
-                    })
             
-            if site_name in ["에펨코리아", "공식홈페이지"]:
-                break
-                
             page += 1
-            time.sleep(random.uniform(1.0, 2.0))
+            time.sleep(random.uniform(0.3, 0.5))
         except Exception:
             break
             
     return data_list
 
 def main():
+    new_collected = []
+    
+    # 💡 대시보드가 넘겨주는 인자값 [시작일] [종료일]을 칼같이 인식
+    if len(sys.argv) > 2:
+        target_start_date = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+        target_end_date = datetime.datetime.strptime(sys.argv[2], "%Y-%m-%d").date()
+    elif len(sys.argv) > 1:
+        target_start_date = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+        target_end_date = datetime.date.today()
+    else:
+        target_start_date = datetime.date(2026, 6, 1)
+        target_end_date = datetime.date.today()
+        
+    # 💡 공홈을 포함한 4대 타깃 검색창 완벽 매핑
     targets = {
-        "인벤": {"url": "https://www.inven.co.kr/board/fo4/5256?p=1", "selector": "td.tit .sj"},
-        "에펨코리아": {"url": "https://www.fmkorea.com/fifaonline", "selector": "td.title a.title"},
-        "디시인사이드": {"url": "https://m.dcinside.com/board/fifaonline4", "selector": ".gall-detail-lnktit"},
-        "공식홈페이지": {"url": "https://fconline.nexon.com/Community/Free/List", "selector": ".board_list .title"}
+        "에펨코리아": {
+            "base_url": "https://www.fmkorea.com/search.php?mid=fifa_online&search_target=title_content",
+            "selectors": {"container": "tr.lt", "title": "td.title a.title", "date_selectors": ["td.time", "td.date"]}
+        },
+        "인벤": {
+            "base_url": "https://www.inven.co.kr/board/fo4/5256?searchtype=subject",
+            "selectors": {"container": "tbody tr", "title": "td.tit .sj", "date_selectors": ["td.date"]}
+        },
+        "디시인사이드": {
+            "base_url": "https://m.dcinside.com/board/fifaonline4?s_type=subject_m",
+            "selectors": {"container": "ul.gall-detail-lst li", "title": ".gall-detail-lnktit", "date_selectors": [".gdate"]}
+        },
+        "공식홈페이지": {
+            "base_url": "https://fconline.nexon.com/Community/Free/List?search_type=1",
+            "selectors": {"container": "div.board_list ul li", "title": "span.title", "date_selectors": ["span.date"]}
+        }
     }
     
-    new_collected = []
+    keywords = ["아다리", "굴절"]
+    
+    print(f"🚀 [통합 엔진 가동] 4대 커뮤니티 검색창 정밀 조준 ({target_start_date} ~ {target_end_date})")
+    
     for site_name, info in targets.items():
-        site_data = crawl_site_dynamic(site_name, info["url"], info["selector"])
-        new_collected.extend(site_data)
+        for kw in keywords:
+            site_data = crawl_search_engine(site_name, kw, info, target_start_date, target_end_date)
+            new_collected.extend(site_data)
         
-    # ⭐ [오류 해결 치트키] 서버 환경에서도 헷갈리지 않게 현재 scraper.py 주위의 절대 경로를 계산해냅니다.
     current_dir = os.path.dirname(os.path.abspath(__file__))
     csv_file = os.path.join(current_dir, "adari_data.csv")
     
-    if not new_collected:
-        sites = ["인벤", "에펨코리아", "디시인사이드", "공식홈페이지"]
-        for s in sites:
-            for d in [datetime.date(2026,6,4), datetime.date(2026,6,5)]:
-                new_collected.append({
-                    "날짜": d.strftime("%Y-%m-%d"), "사이트": s,
-                    "제목": f"[{s}] 어제 오늘 아다리 체감 미쳤는데 나만 그러냐", "감성점수": random.choice([2, 3])
-                })
-
-    new_df = pd.DataFrame(new_collected)
-
-    # ⭐ 파일 존재 여부를 절대 경로 기준으로 안전하게 체크!
-    if os.path.exists(csv_file):
-        try:
+    if new_collected:
+        new_df = pd.DataFrame(new_collected)
+        if os.path.exists(csv_file):
             old_df = pd.read_csv(csv_file)
-            combined_df = pd.concat([old_df, new_df], ignore_index=True)
-            combined_df = combined_df.drop_duplicates(subset=["사이트", "제목"], keep="first")
-        except Exception:
+            combined_df = pd.concat([old_df, new_df], ignore_index=True).drop_duplicates(subset=["사이트", "제목"], keep="first")
+        else:
             combined_df = new_df
+        combined_df.to_csv(csv_file, index=False, encoding="utf-8-sig")
+        print(f"\n🎯 [대성공] 대시보드 범위 내 날짜 검증된 진짜 글 {len(new_collected)}개 보관소 적립 완료!")
     else:
-        combined_df = new_df
-        
-    combined_df.to_csv(csv_file, index=False, encoding="utf-8-sig")
+        print(f"\n💡 확인 완료: 현재 설정하신 필터 범위 내에는 조건에 맞는 새 글이 없습니다.")
 
 if __name__ == "__main__":
     main()
